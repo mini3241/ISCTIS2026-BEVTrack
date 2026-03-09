@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pth
+*.npy
+*.log
+.idea/
+.vscode/
+checkpoints/
+training_logs/
+track_results*/
