@@ -2,12 +2,15 @@
 
 Official implementation for ISCTIS 2026 paper.
 
+> **Branch:** `v2` — Three-modal self-attention fusion variant.
+> For the cross-attention version (matching Fig.1 in the paper), see the [`master`](../../tree/master) branch.
+
 ## Architecture
 
 The proposed method performs multi-object tracking in Bird's-Eye View (BEV) by fusing monocular camera and 4D millimeter-wave radar. Key components:
 
 - **Uncertainty-Aware Pseudo-Point Module**: Generates pseudo-LiDAR points from monocular depth estimation with confidence weighting
-- **Cross-Modal Transformer**: Pre-fuses pseudo-point and radar BEV as Keys/Values, image BEV as Queries for cross-attention alignment
+- **Cross-Modal Transformer (v2 — Self-Attention)**: Image, radar, and pseudo-point BEV features are all projected to a shared dimension, concatenated, and processed via multi-head self-attention
 - **Confidence-Driven Kalman Tracker**: Adapts observation noise based on fused detection confidence
 
 ## Project Structure
@@ -20,7 +23,7 @@ The proposed method performs multi-object tracking in Bird's-Eye View (BEV) by f
 │   ├── radar_branch.py       # Radar voxelization and BEV encoder
 │   ├── image_branch.py       # Camera ResNet34 + depth estimation
 │   ├── pseudo_lidar.py       # Pseudo-LiDAR generation with YOLOv5
-│   └── fusion.py             # Cross-Modal Transformer fusion
+│   └── fusion.py             # Three-modal self-attention fusion
 ├── data/
 │   └── dataset.py            # Dataset loading and preprocessing
 ├── utils/

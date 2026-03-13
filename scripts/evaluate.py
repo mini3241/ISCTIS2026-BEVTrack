@@ -13,11 +13,11 @@ import numpy as np
 # Add parent directory to path
 sys.path.insert(0, '/mnt/ChillDisk/personal_data/mij/pythonProject1')
 
-from radar_camera_fusion_v3.config.base import BaseConfig
-from radar_camera_fusion_v3.models.base_model import RadarCameraFusionModel
-from radar_camera_fusion_v3.data.dataset import RadarCameraDataset, custom_collate_fn
-from radar_camera_fusion_v3.utils.tracker import SequenceMOTATracker, Detection, FusionState
-from radar_camera_fusion_v3.utils.metrics import compute_mota_motp, accumulate_mota_stats
+from radar_camera_fusion_v2.config.base import BaseConfig
+from radar_camera_fusion_v2.models.base_model import RadarCameraFusionModel
+from radar_camera_fusion_v2.data.dataset import RadarCameraDataset, custom_collate_fn
+from radar_camera_fusion_v2.utils.tracker import SequenceMOTATracker, Detection, FusionState
+from radar_camera_fusion_v2.utils.metrics import compute_mota_motp, accumulate_mota_stats
 
 
 class Evaluator:

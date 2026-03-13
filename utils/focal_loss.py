@@ -7,7 +7,7 @@ Usage:
         # from:
         self.detection_loss_fn = nn.BCEWithLogitsLoss()
         # to:
-        from radar_camera_fusion_v3.utils.focal_loss import GaussianFocalLoss
+        from radar_camera_fusion_v2.utils.focal_loss import GaussianFocalLoss
         self.detection_loss_fn = GaussianFocalLoss()
 """
 
