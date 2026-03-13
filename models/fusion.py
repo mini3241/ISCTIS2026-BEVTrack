@@ -1,5 +1,13 @@
 """
-Fusion module for combining radar, pseudo-LiDAR, and image BEV features.
+Cross-Modal Transformer (CMT) fusion module.
+
+Paper III.D: project image, pseudo-point, and radar tokens into a
+unified representation space, utilizing cross-attention to enforce
+semantic and geometric alignment.
+
+All three modalities are projected to a common embedding dimension,
+concatenated along the token (spatial) axis, and processed through
+self-attention so every modality can attend to every other modality.
 """
 
 import torch
@@ -10,125 +18,153 @@ from typing import List
 from ..config.base import BaseConfig
 
 
-class ConcatFusion(nn.Module):
-    """Simple concatenation fusion."""
+class CrossModalTransformer(nn.Module):
+    """
+    Cross-Modal Transformer (Paper III.D).
 
-    def __init__(self, config: BaseConfig):
+    Projects image / pseudo-point / radar BEV features into a unified
+    token space and applies multi-head self-attention across all three
+    modality tokens, enabling full cross-modal interaction.
+    """
+
+    def __init__(self, embed_dim: int = 128, num_heads: int = 8,
+                 attn_spatial_size: int = 32):
         super().__init__()
-        self.config = config
+        self.embed_dim = embed_dim
+        self.attn_spatial_size = attn_spatial_size  # downsample BEV to this before attention
 
-    def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
+        # Project each modality to common embed_dim
+        self.image_proj = nn.Sequential(
+            nn.Conv2d(64, embed_dim, 1),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.radar_proj = nn.Sequential(
+            nn.Conv2d(128, embed_dim, 1),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.pseudo_proj = nn.Sequential(
+            nn.Conv2d(128, embed_dim, 1),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+        )
+
+        # Learnable modality-type embeddings (like segment embeddings in BERT)
+        # so the attention can distinguish which tokens come from which modality
+        self.image_type_embed = nn.Parameter(torch.randn(1, embed_dim, 1, 1) * 0.02)
+        self.radar_type_embed = nn.Parameter(torch.randn(1, embed_dim, 1, 1) * 0.02)
+        self.pseudo_type_embed = nn.Parameter(torch.randn(1, embed_dim, 1, 1) * 0.02)
+
+        # Multi-head self-attention over the concatenated tri-modal tokens
+        self.self_attention = nn.MultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+
+        # Post-attention: LayerNorm + FFN
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
+
+        # Output projection: merge tri-modal output back to single BEV
+        # After attention each modality gets N tokens, we take all 3*N tokens
+        # and compress back via a 1x1 conv over the 3-channel stack
+        self.output_proj = nn.Sequential(
+            nn.Conv2d(embed_dim * 3, embed_dim, 1),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, image_bev: torch.Tensor,
+                radar_bev: torch.Tensor,
+                pseudo_bev: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            features: List of BEV features [radar, pseudo, image]
+            image_bev:  (B, 64,  H, W)
+            radar_bev:  (B, 128, H, W)
+            pseudo_bev: (B, 128, H, W)
         Returns:
-            fused_features: (B, C, H, W)
+            fused: (B, 128, H, W)
         """
-        return torch.cat(features, dim=1)
+        B, _, H, W = image_bev.shape
+        S = self.attn_spatial_size  # attention spatial size (e.g. 32)
 
+        # Project to common dimension + add modality-type embeddings
+        img_tok = self.image_proj(image_bev) + self.image_type_embed    # (B, D, H, W)
+        rad_tok = self.radar_proj(radar_bev) + self.radar_type_embed    # (B, D, H, W)
+        pse_tok = self.pseudo_proj(pseudo_bev) + self.pseudo_type_embed  # (B, D, H, W)
 
-class WeightedSumFusion(nn.Module):
-    """Weighted sum fusion with learnable weights."""
+        # Downsample to manageable resolution for attention
+        # 350x350=122,500 tokens is too large; 32x32=1,024 tokens is feasible
+        img_ds = F.adaptive_avg_pool2d(img_tok, (S, S))  # (B, D, S, S)
+        rad_ds = F.adaptive_avg_pool2d(rad_tok, (S, S))
+        pse_ds = F.adaptive_avg_pool2d(pse_tok, (S, S))
 
-    def __init__(self, config: BaseConfig):
-        super().__init__()
-        self.config = config
+        N = S * S  # number of spatial tokens per modality after downsampling
 
-        # Learnable weights for each modality
-        self.weights = nn.Parameter(torch.ones(3))  # radar, pseudo, image
+        # Flatten to sequences: (B, N, D)
+        img_seq = img_ds.flatten(2).permute(0, 2, 1)   # (B, N, D)
+        rad_seq = rad_ds.flatten(2).permute(0, 2, 1)   # (B, N, D)
+        pse_seq = pse_ds.flatten(2).permute(0, 2, 1)   # (B, N, D)
 
-    def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
-        """
-        Args:
-            features: List of BEV features [radar, pseudo, image]
-        Returns:
-            fused_features: (B, C, H, W)
-        """
-        weights = F.softmax(self.weights, dim=0)
-        fused = sum(w * feat for w, feat in zip(weights, features))
-        return fused
+        # Concatenate all modality tokens: (B, 3*N, D)
+        all_tokens = torch.cat([img_seq, rad_seq, pse_seq], dim=1)
 
+        # Self-attention: every token attends to every other token
+        # This enables: image↔radar, image↔pseudo, radar↔pseudo interactions
+        attn_out, _ = self.self_attention(all_tokens, all_tokens, all_tokens)
 
-class AttentionFusion(nn.Module):
-    """Attention-based fusion."""
+        # Residual + LayerNorm + FFN
+        attn_out = self.norm1(all_tokens + attn_out)
+        attn_out = self.norm2(attn_out + self.ffn(attn_out))
 
-    def __init__(self, config: BaseConfig):
-        super().__init__()
-        self.config = config
+        # Split back into per-modality outputs
+        img_out = attn_out[:, 0:N, :]        # (B, N, D)
+        rad_out = attn_out[:, N:2*N, :]      # (B, N, D)
+        pse_out = attn_out[:, 2*N:3*N, :]    # (B, N, D)
 
-        # Attention mechanism
-        self.query = nn.Linear(128, 128)  # Query from radar features
-        self.key = nn.Linear(128, 128)   # Key from aligned image features
-        self.value = nn.Linear(128, 128) # Value from aligned image features
+        # Reshape each back to spatial (at downsampled resolution)
+        img_spatial = img_out.permute(0, 2, 1).reshape(B, self.embed_dim, S, S)
+        rad_spatial = rad_out.permute(0, 2, 1).reshape(B, self.embed_dim, S, S)
+        pse_spatial = pse_out.permute(0, 2, 1).reshape(B, self.embed_dim, S, S)
 
-        self.attention = nn.MultiheadAttention(128, 8, batch_first=True)
+        # Upsample back to original BEV resolution
+        img_spatial = F.interpolate(img_spatial, size=(H, W), mode='bilinear', align_corners=False)
+        rad_spatial = F.interpolate(rad_spatial, size=(H, W), mode='bilinear', align_corners=False)
+        pse_spatial = F.interpolate(pse_spatial, size=(H, W), mode='bilinear', align_corners=False)
 
-    def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
-        """
-        Args:
-            features: List of BEV features [radar, pseudo, image]
-        Returns:
-            fused_features: (B, C, H, W)
-        """
-        radar_feat, pseudo_feat, image_feat = features
-
-        # Flatten spatial dimensions
-        B, C_radar, H, W = radar_feat.shape
-        radar_flat = radar_feat.view(B, C_radar, -1).permute(0, 2, 1)  # (B, H*W, C_radar)
-
-        B, C_image, H, W = image_feat.shape
-        image_flat = image_feat.view(B, C_image, -1).permute(0, 2, 1)    # (B, H*W, C_image)
-
-        # Compute attention
-        query = self.query(radar_flat)  # (B, H*W, 128)
-        key = self.key(image_flat)      # (B, H*W, 128)
-        value = self.value(image_flat)  # (B, H*W, 128)
-
-        attended, _ = self.attention(query, key, value)
-
-        # Reshape back
-        fused = attended.permute(0, 2, 1).view(B, 128, H, W)
+        # Merge all three enhanced modalities
+        merged = torch.cat([img_spatial, rad_spatial, pse_spatial], dim=1)  # (B, 3D, H, W)
+        fused = self.output_proj(merged)  # (B, D, H, W)
 
         return fused
 
 
 class FusionModule(nn.Module):
-    """Main fusion module that selects fusion method."""
+    """
+    Main fusion module.
+
+    Wraps CrossModalTransformer, keeps the same forward signature as the
+    original FusionModule so base_model.py needs zero changes.
+    """
 
     def __init__(self, config: BaseConfig):
         super().__init__()
         self.config = config
+        self.cmt = CrossModalTransformer(embed_dim=128, num_heads=8)
 
-        # Select fusion method
-        if config.fusion_method == 'concat':
-            self.fusion = ConcatFusion(config)
-        elif config.fusion_method == 'weighted_sum':
-            self.fusion = WeightedSumFusion(config)
-        elif config.fusion_method == 'attention':
-            self.fusion = AttentionFusion(config)
-        else:
-            raise ValueError(f"Unknown fusion method: {config.fusion_method}")
-
-        # Feature alignment if needed
-        self.radar_adjust = nn.Conv2d(128, 128, 1) if config.fusion_method != 'concat' else nn.Identity()
-        self.pseudo_adjust = nn.Conv2d(128, 128, 1) if config.fusion_method != 'concat' else nn.Identity()
-        self.image_adjust = nn.Conv2d(64, 128, 1) if config.fusion_method != 'concat' else nn.Identity()
-
-    def forward(self, radar_bev: torch.Tensor, pseudo_bev: torch.Tensor, image_bev: torch.Tensor) -> torch.Tensor:
+    def forward(self, radar_bev: torch.Tensor,
+                pseudo_bev: torch.Tensor,
+                image_bev: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            radar_bev: (B, 128, H, W) radar BEV features
-            pseudo_bev: (B, 128, H, W) pseudo-LiDAR BEV features
-            image_bev: (B, 64, H, W) image BEV features
+            radar_bev:  (B, 128, H, W)
+            pseudo_bev: (B, 128, H, W)
+            image_bev:  (B, 64, H, W)
         Returns:
-            fused_features: (B, C, H, W)
+            fused: (B, 128, H, W)
         """
-        # Adjust feature dimensions if needed
-        radar_aligned = self.radar_adjust(radar_bev)
-        pseudo_aligned = self.pseudo_adjust(pseudo_bev)
-        image_aligned = self.image_adjust(image_bev)
-
-        # Apply fusion
-        fused = self.fusion([radar_aligned, pseudo_aligned, image_aligned])
-
-        return fused
+        return self.cmt(image_bev, radar_bev, pseudo_bev)

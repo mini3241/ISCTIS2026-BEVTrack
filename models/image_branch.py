@@ -40,18 +40,21 @@ class ResNet34Backbone(nn.Module):
 
 
 class DepthEstimator(nn.Module):
-    """Depth estimation module with upsampling to recover resolution."""
+    """
+    Uncertainty-aware depth estimation module (Paper III.B.1).
+    Outputs predicted depth d_{u,v} and logarithmic variance s_{u,v}
+    for heteroscedastic uncertainty modeling.
+    """
 
     def __init__(self, config: BaseConfig, max_depth: float = 75.0):
         super().__init__()
         self.config = config
         self.max_depth = max_depth
 
-        # Decoder with progressive upsampling
+        # Shared decoder with progressive upsampling
         # Input: (B, 512, H/32, W/32) from ResNet34
-        # Output: (B, 1, H/4, W/4) - 8x upsampling
-
-        self.decoder = nn.Sequential(
+        # Output: (B, 64, H/4, W/4) shared features
+        self.shared_decoder = nn.Sequential(
             # First upsample: H/32 -> H/16
             nn.Conv2d(512, 256, 3, padding=1),
             nn.BatchNorm2d(256),
@@ -70,23 +73,34 @@ class DepthEstimator(nn.Module):
             nn.ReLU(inplace=True),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
 
-            # Final depth prediction
             nn.Conv2d(64, 32, 3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, 1, 1)
         )
 
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        # Depth prediction head: outputs d_{u,v}
+        self.depth_head = nn.Conv2d(32, 1, 1)
+
+        # Uncertainty prediction head: outputs log variance s_{u,v}
+        self.log_var_head = nn.Conv2d(32, 1, 1)
+
+    def forward(self, features: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Args:
             features: (B, 512, H/32, W/32) feature maps from ResNet34
         Returns:
-            depth: (B, 1, H/4, W/4) depth estimates in [0, max_depth] meters
+            dict with:
+                'depth': (B, 1, H/4, W/4) depth in [0, max_depth]
+                'log_var': (B, 1, H/4, W/4) log variance s_{u,v}
         """
-        depth = self.decoder(features)
-        # sigmoid maps to (0, 1), then scale to (0, max_depth)
-        depth = torch.sigmoid(depth) * self.max_depth
-        return depth
+        shared_feat = self.shared_decoder(features)
+
+        # Predicted depth
+        depth = torch.sigmoid(self.depth_head(shared_feat)) * self.max_depth
+
+        # Log variance (unbounded, represents aleatoric uncertainty)
+        log_var = self.log_var_head(shared_feat)
+
+        return {'depth': depth, 'log_var': log_var}
 
 
 class LiftSplatShoot(nn.Module):
@@ -265,8 +279,10 @@ class ImageBranch(nn.Module):
         # Extract features
         features = self.resnet_backbone(images)  # (B, 512, H/32, W/32)
 
-        # Estimate depth
-        depth = self.depth_estimator(features)  # (B, 1, H/4, W/4)
+        # Estimate depth (returns dict with 'depth' and 'log_var')
+        depth_out = self.depth_estimator(features)
+        depth = depth_out['depth']      # (B, 1, H/4, W/4)
+        log_var = depth_out['log_var']  # (B, 1, H/4, W/4)
 
         # Generate BEV features using depth-aware LSS
         if intrinsic is not None and lidar_to_camera is not None:
@@ -274,4 +290,4 @@ class ImageBranch(nn.Module):
         else:
             raise ValueError("intrinsic and lidar_to_camera are required for LSS")
 
-        return {'bev_features': bev_features, 'depth_map': depth}
+        return {'bev_features': bev_features, 'depth_map': depth, 'log_var': log_var}

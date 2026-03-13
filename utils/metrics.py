@@ -84,7 +84,8 @@ def compute_mota_motp(gt_positions: np.ndarray, gt_ids: np.ndarray,
         'IDSW': num_idsw,
         'matches': num_matches,
         'num_gt': num_gt,
-        'num_pred': len(pred_positions)
+        'num_pred': len(pred_positions),
+        'matched_distances': matched_distances
     }
 
     return mota, motp, stats
@@ -111,7 +112,10 @@ def accumulate_mota_stats(all_stats: List[Dict[str, int]]) -> Tuple[float, float
 
     overall_mota = 1.0 - (total_fp + total_fn + total_idsw) / total_gt
 
-    # MOTP is not accumulated in this simple version
-    overall_motp = 0.0
+    # MOTP: average distance over all matched pairs across all frames
+    all_distances = []
+    for s in all_stats:
+        all_distances.extend(s.get('matched_distances', []))
+    overall_motp = float(np.mean(all_distances)) if len(all_distances) > 0 else 0.0
 
     return overall_mota, overall_motp

@@ -34,12 +34,8 @@ class RadarCameraFusionModel(nn.Module):
     def _build_detection_head(self) -> Optional[nn.Module]:
         """Build detection head if needed."""
         if hasattr(self.config, 'enable_detection') and self.config.enable_detection:
-            # Channel counts after fusion:
-            #   radar_bev: 128, pseudo_bev: 128, image_bev: 64 (from new LSS)
-            if self.config.fusion_method == 'concat':
-                in_channels = 128 + 128 + 64  # = 320
-            else:
-                in_channels = 128
+            # CMT fusion output: 128 channels
+            in_channels = 128
 
             return nn.Sequential(
                 nn.Conv2d(in_channels, 256, 3, padding=1),
