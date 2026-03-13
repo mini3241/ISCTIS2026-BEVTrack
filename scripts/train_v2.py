@@ -1,6 +1,6 @@
 """
-Training script for radar-camera fusion model.
-Clean, modular implementation.
+Training script for radar-camera fusion model (v2).
+Uses GaussianFocalLoss to handle BEV heatmap class imbalance.
 """
 
 import os
@@ -23,6 +23,7 @@ from radar_camera_fusion_v3.models.base_model import RadarCameraFusionModel
 from radar_camera_fusion_v3.data.dataset import RadarCameraDataset, custom_collate_fn
 from radar_camera_fusion_v3.utils.tracker import SequenceMOTATracker, Detection, FusionState
 from radar_camera_fusion_v3.utils.metrics import compute_mota_motp, accumulate_mota_stats
+from radar_camera_fusion_v3.utils.focal_loss import GaussianFocalLoss
 import torch.nn.functional as F
 
 
@@ -177,7 +178,7 @@ class Trainer:
         )
 
         # Loss functions
-        self.detection_loss_fn = nn.BCEWithLogitsLoss()
+        self.detection_loss_fn = GaussianFocalLoss(alpha=2.0, beta=4.0)
         self.depth_loss_fn = ScaleInvariantDepthLoss(si_weight=0.5)
         self.smooth_edge_loss = SmoothEdgeLoss()
 
@@ -196,6 +197,7 @@ class Trainer:
         self.logger.info(f"Validation set: {len(self.valid_dataset)} samples")
         self.logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         self.logger.info(f"TensorBoard logs: {log_dir}")
+        self.logger.info(f"Detection loss: GaussianFocalLoss (alpha=2.0, beta=4.0)")
         self.logger.info(f"Config: batch_size={config.batch_size}, lr={config.learning_rate}, "
                         f"bev_resolution={config.bev_resolution}, image_size={config.image_size}")
 
