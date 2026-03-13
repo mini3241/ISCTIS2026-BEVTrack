@@ -2,6 +2,9 @@
 
 Official implementation for ISCTIS 2026 paper.
 
+> **Branch:** `master` — Cross-attention fusion (matching Fig.1 in the paper): pseudo+radar pre-fused as K/V, image as Q.
+> See also the [`v2`](../../tree/v2) branch for the three-modal self-attention variant.
+
 ## Architecture
 
 The proposed method performs multi-object tracking in Bird's-Eye View (BEV) by fusing monocular camera and 4D millimeter-wave radar. Key components:
