@@ -1,64 +1,59 @@
 # Robust BEV Tracking with Uncertainty-Aware Pseudo-Points and Cross-Modal Transformer
 
-Official implementation for ISCTIS 2025 paper.
+Official implementation for ISCTIS 2026 paper.
 
 ## Architecture
 
 The proposed method performs multi-object tracking in Bird's-Eye View (BEV) by fusing monocular camera and 4D millimeter-wave radar. Key components:
 
 - **Uncertainty-Aware Pseudo-Point Module**: Generates pseudo-LiDAR points from monocular depth estimation with confidence weighting
-- **Cross-Modal Transformer**: Aligns radar and visual features in BEV space
+- **Cross-Modal Transformer**: Pre-fuses pseudo-point and radar BEV as Keys/Values, image BEV as Queries for cross-attention alignment
 - **Confidence-Driven Kalman Tracker**: Adapts observation noise based on fused detection confidence
 
 ## Project Structure
 
 ```
-├── models/               # Network architecture
-│   ├── base_model.py     # Main fusion model
-│   ├── radar_branch.py   # Radar PointPillars-style encoder
-│   ├── image_branch.py   # Camera ResNet34 + depth estimation
-│   ├── pseudo_lidar.py   # Pseudo-LiDAR generation with YOLOv5
-│   └── fusion.py         # Multi-modal fusion strategies
-├── data/
-│   └── dataset.py        # Dataset loading and preprocessing
-├── utils/
-│   ├── tracker.py        # Kalman filter tracking and data association
-│   └── metrics.py        # MOTA/MOTP evaluation metrics
 ├── config/
-│   └── base.py           # Configuration
+│   └── base.py               # Configuration
+├── models/
+│   ├── base_model.py         # Main fusion model
+│   ├── radar_branch.py       # Radar voxelization and BEV encoder
+│   ├── image_branch.py       # Camera ResNet34 + depth estimation
+│   ├── pseudo_lidar.py       # Pseudo-LiDAR generation with YOLOv5
+│   └── fusion.py             # Cross-Modal Transformer fusion
+├── data/
+│   └── dataset.py            # Dataset loading and preprocessing
+├── utils/
+│   ├── tracker.py            # Kalman filter tracking and data association
+│   ├── metrics.py            # MOTA/MOTP evaluation metrics
+│   └── focal_loss.py         # Gaussian Focal Loss for heatmap detection
 ├── scripts/
-│   ├── train.py          # Training script
-│   └── evaluate.py       # Evaluation script
-├── fusion_model_v42_with_yolo.py  # Production model
-└── evaluate_epoch73.py            # Paper results evaluation
+│   ├── train.py              # Training script
+│   ├── train_v2.py           # Training script with Focal Loss
+│   ├── evaluate.py           # Evaluation script
+│   ├── debug_visualization.py    # Model output visualization
+│   └── test_visualization.py     # Raw data visualization
 ```
 
 ## Requirements
 
-```bash
-pip install -r requirements.txt
-```
+- PyTorch >= 1.10
+- torchvision
+- numpy, scipy, opencv-python
+- matplotlib, tqdm, pandas
 
 YOLOv5 is loaded automatically via `torch.hub`.
-
-## Pre-trained Weights
-
-Download the pre-trained model checkpoint (epoch 73):
-
-- [Google Drive](TODO) | [Baidu Pan](TODO)
-
-Place the downloaded `model_epoch_73.pth` in the `checkpoints/` directory.
-
-## Evaluation
-
-```bash
-python evaluate_epoch73.py
-```
 
 ## Training
 
 ```bash
 python scripts/train.py
+```
+
+## Evaluation
+
+```bash
+python scripts/evaluate.py
 ```
 
 ## Dataset
@@ -70,9 +65,9 @@ We use a self-collected multi-sensor dataset with a monocular camera (960x510), 
 If you find this work useful, please cite:
 
 ```bibtex
-@inproceedings{bevtrack2025,
+@inproceedings{bevtrack2026,
   title={Robust BEV Tracking with Uncertainty-Aware Pseudo-Points and Cross-Modal Transformer},
-  booktitle={ISCTIS 2025},
-  year={2025}
+  booktitle={ISCTIS 2026},
+  year={2026}
 }
 ```
